@@ -1,0 +1,23 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mallang-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mallang
+      POSTGRES_PASSWORD: mallang
+      POSTGRES_DB: mallang
+    ports:
+      - '5432:5432'
+    volumes:
+      - mallang-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mallang -d mallang']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mallang-postgres-data:

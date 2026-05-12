@@ -1,0 +1,148 @@
+// Mallang Core Prisma schema
+// 마이그레이션: pnpm prisma:migrate
+// 스튜디오:    pnpm prisma:studio
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Hobby {
+  rest
+  workout
+  self_development
+}
+
+enum VoteStatus {
+  open
+  closed
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teams Team[]
+  users User[]
+
+  @@map("companies")
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String
+  companyId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company?    @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  members    User[]
+  lunchVotes LunchVote[]
+
+  // 같은 회사 안에서는 팀명이 유일하다. companyId가 null이면 글로벌 팀명으로 취급.
+  @@unique([companyId, name])
+  @@map("teams")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String
+  hobby         Hobby    @default(rest)
+  workStartTime String   @default("09:00")
+  lunchTime     String   @default("12:30")
+  workEndTime   String   @default("18:00")
+  allergies     String?
+  companyId     String?
+  teamId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  team          Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  refreshTokens RefreshToken[]
+  votes         LunchVoteOptionVote[]
+  emotionLogs   EmotionLog[]
+
+  @@index([teamId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model LunchVote {
+  id        String     @id @default(cuid())
+  teamId    String
+  title     String     @default("오늘 점심 뭐 먹지?")
+  status    VoteStatus @default(open)
+  date      DateTime   @default(now())
+  closesAt  DateTime?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  team    Team              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  options LunchVoteOption[]
+
+  @@index([teamId, status])
+  @@map("lunch_votes")
+}
+
+model LunchVoteOption {
+  id          String   @id @default(cuid())
+  lunchVoteId String
+  label       String
+  createdAt   DateTime @default(now())
+
+  vote  LunchVote             @relation(fields: [lunchVoteId], references: [id], onDelete: Cascade)
+  votes LunchVoteOptionVote[]
+
+  @@index([lunchVoteId])
+  @@map("lunch_vote_options")
+}
+
+model LunchVoteOptionVote {
+  id        String   @id @default(cuid())
+  optionId  String
+  userId    String
+  createdAt DateTime @default(now())
+
+  option LunchVoteOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 한 옵션당 한 유저는 1표.
+  @@unique([optionId, userId])
+  @@map("lunch_vote_option_votes")
+}
+
+model EmotionLog {
+  id        String   @id @default(cuid())
+  userId    String
+  emotion   String
+  note      String?
+  loggedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, loggedAt])
+  @@map("emotion_logs")
+}
