@@ -22,6 +22,35 @@ enum VoteStatus {
   closed
 }
 
+// 말랑이 상태/감정 라벨. 프론트의 MallangState와 1:1 매핑된다.
+// '기쁨'=happy / '보통'=neutral / '지침'=tired / '슬픔'=sad / '화남'=angry
+enum Emotion {
+  happy
+  neutral
+  tired
+  sad
+  angry
+}
+
+enum ChatRole {
+  user
+  assistant
+}
+
+// 채팅 인텐트.
+// free          : 사용자가 직접 말 건 일반 채팅
+// morning_check : 출근 시간대 자동 메시지
+// lunch_alert   : 점심 시간대 알림(투표)
+// lunch_review  : 점심 후 후기 알림
+// evening_check : 퇴근 시간대 자동 메시지 (야근 여부 판단 대상)
+enum ChatIntent {
+  free
+  morning_check
+  lunch_alert
+  lunch_review
+  evening_check
+}
+
 model Company {
   id        String   @id @default(cuid())
   name      String
@@ -51,25 +80,30 @@ model Team {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  passwordHash  String
-  name          String
-  hobby         Hobby    @default(rest)
-  workStartTime String   @default("09:00")
-  lunchTime     String   @default("12:30")
-  workEndTime   String   @default("18:00")
-  allergies     String?
-  companyId     String?
-  teamId        String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String
+  name            String
+  hobby           Hobby    @default(rest)
+  workStartTime   String   @default("09:00")
+  lunchTime       String   @default("12:30")
+  workEndTime     String   @default("18:00")
+  allergies       String?
+  companyId       String?
+  teamId          String?
+  // 사용자별 OpenAI API key. AES-256-GCM(`iv:tag:ciphertext` base64)로 저장한다.
+  // 평문은 절대 응답에 노출하지 않고, 마스킹된 hint(앞 5자 + ...)만 메타로 제공한다.
+  openaiKeyEnc    String?
+  openaiKeyUpdatedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
   team          Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   refreshTokens RefreshToken[]
   votes         LunchVoteOptionVote[]
   emotionLogs   EmotionLog[]
+  chatMessages  ChatMessage[]
 
   @@index([teamId])
   @@map("users")
@@ -90,19 +124,23 @@ model RefreshToken {
 }
 
 model LunchVote {
-  id        String     @id @default(cuid())
-  teamId    String
-  title     String     @default("오늘 점심 뭐 먹지?")
-  status    VoteStatus @default(open)
-  date      DateTime   @default(now())
-  closesAt  DateTime?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id             String     @id @default(cuid())
+  teamId         String
+  title          String     @default("오늘 점심 뭐 먹지?")
+  status         VoteStatus @default(open)
+  date           DateTime   @default(now())
+  closesAt       DateTime?
+  // 투표 마감 시점에 결정된 우승 옵션. 동점이면 후보 중 무작위로 1개가 선택된다.
+  // 한 번 결정되면 다시 바뀌지 않도록 close 트랜잭션 안에서만 기록한다.
+  winnerOptionId String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
   team    Team              @relation(fields: [teamId], references: [id], onDelete: Cascade)
   options LunchVoteOption[]
 
   @@index([teamId, status])
+  @@index([status, closesAt])
   @@map("lunch_votes")
 }
 
@@ -133,15 +171,42 @@ model LunchVoteOptionVote {
   @@map("lunch_vote_option_votes")
 }
 
-model EmotionLog {
-  id        String   @id @default(cuid())
+// 사용자와 말랑이의 대화 한 턴을 표현.
+// - role=user 메시지에는 LLM이 분석한 EmotionLog가 1개 연결될 수 있다.
+// - role=assistant 메시지에는 분석이 붙지 않는다.
+model ChatMessage {
+  id        String      @id @default(cuid())
   userId    String
-  emotion   String
-  note      String?
-  loggedAt  DateTime @default(now())
-  createdAt DateTime @default(now())
+  role      ChatRole
+  intent    ChatIntent  @default(free)
+  content   String
+  // 인텐트별 부가 정보(예: evening_check의 isLeftOffice 결과)는 metadata에 자유 JSON으로 보관.
+  metadata  Json?
+  createdAt DateTime    @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emotionLogs EmotionLog[]
+
+  @@index([userId, createdAt])
+  @@map("chat_messages")
+}
+
+model EmotionLog {
+  id            String    @id @default(cuid())
+  userId        String
+  emotion       Emotion   @default(neutral)
+  // 감정의 강도 (0~100). 후속 단계에서 말랑이 상태/주간 리포트 점수로 환산된다.
+  score         Int       @default(50)
+  // LLM이 뽑아낸 키워드(최대 5개).
+  keywords      String[]  @default([])
+  // 어떤 채팅 메시지(=role:user)에서 추출됐는지. 시간대 자동 메시지/일반 채팅 모두 동일하게 연결.
+  chatMessageId String?
+  note          String?
+  loggedAt      DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatMessage ChatMessage? @relation(fields: [chatMessageId], references: [id], onDelete: SetNull)
 
   @@index([userId, loggedAt])
   @@map("emotion_logs")
