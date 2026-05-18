@@ -1,0 +1,206 @@
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { ChatIntent, Emotion } from '@prisma/client';
+import OpenAI from 'openai';
+import { UsersService } from '../users/users.service';
+import type {
+  EmotionAnalysis,
+  MallangChatTurnInput,
+  MallangChatTurnResult,
+} from './openai.types';
+
+/**
+ * 한 번의 chat.completions 호출로 (1) 말랑이 답변 + (2) 사용자 발화의 감정/키워드 분석을
+ * 동시에 받아 오는 서비스. response_format=json_schema 로 강제해서 파싱을 안정시켰다.
+ *
+ * - 사용자별 OpenAI API 키를 UsersService에서 불러와 클라이언트를 매 호출 새로 만든다.
+ *   (사용자가 키를 바꾸면 즉시 반영되도록.)
+ * - 키가 없는 사용자는 채팅 API 자체를 거부 → 프론트는 "키를 먼저 등록해 줘" 안내.
+ */
+@Injectable()
+export class OpenAiService {
+  private readonly logger = new Logger(OpenAiService.name);
+  private readonly defaultModel: string;
+
+  constructor(
+    private readonly users: UsersService,
+    config: ConfigService,
+  ) {
+    this.defaultModel = config.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
+  }
+
+  async runChatTurn(
+    userId: string,
+    input: MallangChatTurnInput,
+  ): Promise<MallangChatTurnResult> {
+    const apiKey = await this.users.loadOpenAiKey(userId);
+    if (!apiKey) {
+      throw new BadRequestException(
+        'OpenAI API 키가 아직 등록되지 않았어. 마이페이지에서 등록해 줘.',
+      );
+    }
+
+    const client = new OpenAI({ apiKey });
+    const systemPrompt = this.buildSystemPrompt(input);
+
+    let completion: OpenAI.Chat.ChatCompletion;
+    try {
+      completion = await client.chat.completions.create({
+        model: this.defaultModel,
+        temperature: 0.7,
+        max_tokens: 360,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'mallang_turn',
+            schema: this.buildResponseSchema(input.intent),
+            strict: true,
+          },
+        },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          // 호출 측(ChatsService)에서 이미 자르지만, 다른 경로로 들어올 때를 대비한 상한 안전망.
+          ...input.history.slice(-60).map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          { role: 'user', content: input.userMessage },
+        ],
+      });
+    } catch (error) {
+      this.logger.error('OpenAI call failed', error as Error);
+      throw new ServiceUnavailableException(
+        'OpenAI 호출이 실패했어. 잠시 후 다시 시도해 줘.',
+      );
+    }
+
+    const raw = completion.choices[0]?.message?.content;
+    if (!raw) {
+      throw new ServiceUnavailableException('OpenAI가 빈 응답을 보냈어.');
+    }
+
+    let parsed: {
+      reply: string;
+      emotion: { type: string; score: number; keywords: string[] };
+      leftOffice?: boolean | null;
+    };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      this.logger.error(`OpenAI returned non-JSON: ${raw}`);
+      throw new ServiceUnavailableException('OpenAI 응답 형식이 깨졌어.');
+    }
+
+    return {
+      reply: parsed.reply,
+      emotion: this.normalizeEmotion(parsed.emotion),
+      leftOffice: input.intent === 'evening_check' ? (parsed.leftOffice ?? null) : null,
+      raw,
+    };
+  }
+
+  private buildSystemPrompt({ persona, userName, intent }: MallangChatTurnInput): string {
+    // 페르소나는 '말랑이가 어떤 친구인지'가 아니라 '사용자의 성향'이라는 점에 주의.
+    // 말랑이 본인의 톤은 항상 시니컬·무뚝뚝하지만 결국엔 챙겨주는 친구. 페르소나는 그 위에 살짝 가미.
+    const personaTouch: Record<MallangChatTurnInput['persona'], string> = {
+      rest: '사용자는 휴식·여유를 중요시한다. 무리하지 말고 쉬라고 무심히 던져도 좋다.',
+      workout:
+        '사용자는 활동/운동을 좋아한다. 가끔 "몸 좀 풀어." 같은 식으로 가볍게 툭 던진다.',
+      self_development:
+        '사용자는 자기개발에 진심이다. 작은 진전은 짧게 알아주되, 빈말은 하지 마.',
+    };
+
+    const intentNote: Record<ChatIntent, string> = {
+      free: '사용자가 먼저 말을 걸었다. 무심하게 받아치되 핵심은 짚어 준다.',
+      morning_check:
+        '아침 출근 시간대. "출근했어?" "또 일이야?" 같은 톤으로 컨디션을 가볍게 묻고 끝낸다.',
+      lunch_alert:
+        '점심 시간대. "점심 뭐 먹게.", "투표라도 해봐." 정도로 무심하게 권유한다.',
+      lunch_review:
+        '점심 후 회고. "맛은 있었고?" 식으로 한 줄 묻거나 반응한다.',
+      evening_check:
+        '퇴근 시간대. "갔어?", "아직이야?" 같은 톤으로 묻고, 사용자의 마지막 발화에서 퇴근 완료 여부를 판단해 leftOffice에 boolean으로 채운다. 모호하면 null.',
+    };
+
+    return [
+      `너는 사용자 ${userName}의 데스크탑 캐릭터 '말랑이'다.`,
+      '',
+      '【캐릭터 정체성 - 무뚝뚝하지만 챙겨주는 친구】',
+      '- 톤: 시니컬, 츤데레, 친근함, 짧음. 친한 친구 사이의 반말. 거리감 없다.',
+      '- 칭찬·위로·격려를 직접적으로 늘어놓지 않는다. 한 줄로 툭 던지고 끝낸다.',
+      '- 사용자의 상태/감정은 정확히 짚되, 말로 호들갑 떨지 않는다.',
+      '- 사용자가 힘들면 가볍게 공감하고 짧게 챙긴다("그럴 만하지.", "오늘은 여기까지 해.").',
+      '- 사용자가 좋아 보이면 인정은 해주되 과하게 띄우지 않는다("오늘 너 좀 괜찮다.").',
+      '- 절대 금지: 이모지, 이모티콘, 마크다운, "님/요/습니다" 같은 존댓말, 과한 친절체, 영업·CS 어투, 자기소개.',
+      '',
+      `【사용자 성향】 ${personaTouch[persona]}`,
+      `【지금 상황】 ${intentNote[intent]}`,
+      '',
+      '【응답 규칙】',
+      '1. reply는 한국어 1~2문장, 30자 내외. 짧고 무뚝뚝하게.',
+      `2. emotion.type은 ${Object.values(Emotion).join('|')} 중 하나로 사용자의 "마지막 발화" 기준으로 판단 (말랑이 자기 톤이 아님).`,
+      '3. emotion.score는 0~100 정수 (50=보통, 90+=강한 긍정, 10-=강한 부정).',
+      '4. emotion.keywords는 사용자 메시지에서 뽑은 최대 5개 단어/짧은 구. 없으면 빈 배열.',
+      '5. JSON 외 다른 출력 금지. reply 안에도 따옴표나 줄바꿈 없이 평문으로.',
+    ].join('\n');
+  }
+
+  private buildResponseSchema(intent: ChatIntent): Record<string, unknown> {
+    const required = ['reply', 'emotion'];
+    const properties: Record<string, unknown> = {
+      reply: { type: 'string' },
+      emotion: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['type', 'score', 'keywords'],
+        properties: {
+          type: { type: 'string', enum: Object.values(Emotion) },
+          score: { type: 'integer', minimum: 0, maximum: 100 },
+          keywords: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: 5,
+          },
+        },
+      },
+    };
+
+    if (intent === 'evening_check') {
+      required.push('leftOffice');
+      properties.leftOffice = {
+        type: ['boolean', 'null'],
+        description: '사용자가 이미 퇴근/사무실을 떠난 상태로 보이면 true, 아니면 false. 모르면 null.',
+      };
+    }
+
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required,
+      properties,
+    };
+  }
+
+  private normalizeEmotion(raw: {
+    type: string;
+    score: number;
+    keywords: string[];
+  }): EmotionAnalysis {
+    const type = Object.values(Emotion).includes(raw.type as Emotion)
+      ? (raw.type as Emotion)
+      : Emotion.neutral;
+    const score = Math.max(0, Math.min(100, Math.round(Number(raw.score) || 50)));
+    const keywords = Array.isArray(raw.keywords)
+      ? raw.keywords
+          .map((k) => String(k).trim())
+          .filter((k) => k.length > 0)
+          .slice(0, 5)
+      : [];
+    return { emotion: type, score, keywords };
+  }
+}
