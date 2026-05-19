@@ -4,10 +4,36 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { LunchVote, LunchVoteOption } from '@prisma/client';
+import type {
+  LunchVote,
+  LunchVoteOption,
+  PriceTier,
+  Restaurant,
+  RestaurantCategory,
+  Team,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateLunchVoteDto } from './dto/create-lunch-vote.dto';
+import { haversineMeters } from './geo.util';
 import { LunchSuggestionService } from './lunch-suggestion.service';
+
+/**
+ * 투표 옵션이 가리키는 식당의 표시용 메타데이터.
+ * - 옵션의 restaurantId가 살아 있을 때만 채워진다(자유 입력 옵션이거나 식당이 삭제됐다면 null).
+ * - distanceMeters는 옵션 생성 시점에 박제하지 않고, 응답 시점의 team 좌표 기준으로
+ *   매번 다시 계산한다. 회사 위치 변경에 즉시 반응시키기 위함이다.
+ */
+export interface LunchVoteOptionRestaurantView {
+  id: string;
+  name: string;
+  category: RestaurantCategory;
+  priceTier: PriceTier;
+  rating: number | null;
+  tags: string[];
+  address: string | null;
+  /** 회사 좌표에서의 직선 거리(미터). team 좌표나 식당 좌표가 없으면 null. */
+  distanceMeters: number | null;
+}
 
 export interface LunchVoteOptionView {
   id: string;
@@ -16,6 +42,10 @@ export interface LunchVoteOptionView {
   restaurantId: string | null;
   voteCount: number;
   voters: { id: string; name: string }[];
+  /** 추천 결정론이 옵션을 만든 한 줄 사유. 자유 입력 옵션은 null. */
+  reason: string | null;
+  /** 옵션이 연결된 식당의 표시용 메타. 자유 입력 또는 식당 삭제 시 null. */
+  restaurant: LunchVoteOptionRestaurantView | null;
 }
 
 export interface LunchVoteView {
@@ -38,10 +68,23 @@ export interface LunchVoteView {
 const DEFAULT_VOTE_WINDOW_MS = 10 * 60 * 1000;
 
 type LunchVoteWithOptions = LunchVote & {
+  team: Team;
   options: (LunchVoteOption & {
+    restaurant: Restaurant | null;
     votes: { userId: string; user: { id: string; name: string } }[];
   })[];
 };
+
+/** 모든 조회/변경에서 동일한 include 트리를 쓰도록 한 곳에 묶어둔다. */
+const VOTE_INCLUDE = {
+  team: true,
+  options: {
+    include: {
+      restaurant: true,
+      votes: { include: { user: { select: { id: true, name: true } } } },
+    },
+  },
+} as const;
 
 @Injectable()
 export class LunchVotesService {
@@ -93,11 +136,7 @@ export class LunchVotesService {
     const existing = await this.prisma.lunchVote.findFirst({
       where: { teamId: me.teamId, createdAt: { gte: todayStart } },
       orderBy: { createdAt: 'desc' },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
     if (existing) {
       const refreshed = await this.autoCloseIfExpired(existing);
@@ -120,14 +159,12 @@ export class LunchVotesService {
           create: suggestion.items.map((item) => ({
             label: item.name,
             restaurantId: item.restaurantId,
+            // 추천 결정론이 만든 한 줄 사유를 박제해둔다. 이후 다시 추천이 돌아도 옵션의 reason은 변하지 않는다.
+            reason: item.reason,
           })),
         },
       },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
 
     return { vote: this.toView(created, userId), notes: suggestion.notes };
@@ -160,11 +197,7 @@ export class LunchVotesService {
           create: optionPayload,
         },
       },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
 
     return this.toView(created, userId);
@@ -186,11 +219,7 @@ export class LunchVotesService {
     const latest = await this.prisma.lunchVote.findFirst({
       where: { teamId, createdAt: { gte: since } },
       orderBy: { createdAt: 'desc' },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
     if (!latest) return [];
     const resolved = await this.autoCloseIfExpired(latest);
@@ -201,11 +230,7 @@ export class LunchVotesService {
     const teamId = await this.getUserTeamIdOrThrow(userId);
     const vote = await this.prisma.lunchVote.findUnique({
       where: { id: voteId },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
     if (!vote) throw new NotFoundException('Vote not found');
     if (vote.teamId !== teamId) throw new ForbiddenException('다른 팀의 투표는 볼 수 없어.');
@@ -257,11 +282,7 @@ export class LunchVotesService {
     if (teamMembers.length > 0 && distinctVoters.length >= teamMembers.length) {
       const full = await this.prisma.lunchVote.findUnique({
         where: { id: voteId },
-        include: {
-          options: {
-            include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-          },
-        },
+        include: VOTE_INCLUDE,
       });
       if (full && full.status === 'open') {
         const closed = await this.markClosedWithWinner(full);
@@ -276,11 +297,7 @@ export class LunchVotesService {
     const teamId = await this.getUserTeamIdOrThrow(userId);
     const vote = await this.prisma.lunchVote.findUnique({
       where: { id: voteId },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
     if (!vote) throw new NotFoundException('Vote not found');
     if (vote.teamId !== teamId) throw new ForbiddenException('다른 팀의 투표는 마감할 수 없어.');
@@ -320,16 +337,15 @@ export class LunchVotesService {
     const updated = await this.prisma.lunchVote.update({
       where: { id: vote.id },
       data: { status: 'closed', winnerOptionId: winnerId },
-      include: {
-        options: {
-          include: { votes: { include: { user: { select: { id: true, name: true } } } } },
-        },
-      },
+      include: VOTE_INCLUDE,
     });
     return updated;
   }
 
   private toView(vote: LunchVoteWithOptions, userId: string): LunchVoteView {
+    const team = vote.team;
+    const teamHasCoords = team.lat !== null && team.lng !== null;
+
     let myOptionId: string | null = null;
     let totalVotes = 0;
     const options: LunchVoteOptionView[] = vote.options.map((option) => {
@@ -341,12 +357,40 @@ export class LunchVotesService {
       if (option.votes.some((v) => v.userId === userId)) {
         myOptionId = option.id;
       }
+
+      const restaurant: LunchVoteOptionRestaurantView | null = option.restaurant
+        ? {
+            id: option.restaurant.id,
+            name: option.restaurant.name,
+            category: option.restaurant.category,
+            priceTier: option.restaurant.priceTier,
+            rating: option.restaurant.rating,
+            tags: option.restaurant.tags,
+            address: option.restaurant.address,
+            distanceMeters:
+              teamHasCoords &&
+              option.restaurant.lat !== null &&
+              option.restaurant.lng !== null
+                ? Math.round(
+                    haversineMeters(
+                      team.lat!,
+                      team.lng!,
+                      option.restaurant.lat,
+                      option.restaurant.lng,
+                    ),
+                  )
+                : null,
+          }
+        : null;
+
       return {
         id: option.id,
         label: option.label,
         restaurantId: option.restaurantId,
         voteCount: voters.length,
         voters,
+        reason: option.reason,
+        restaurant,
       };
     });
 

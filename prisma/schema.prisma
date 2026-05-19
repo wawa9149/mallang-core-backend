@@ -189,6 +189,9 @@ model LunchVoteOption {
   label        String
   // 추천 시스템이 만든 옵션은 식당 row와 연결된다. 자유 입력 옵션은 null.
   restaurantId String?
+  // 옵션 생성 시점에 결정론 추천이 만든 한 줄 사유(예: "한식 선호 매칭 · 14일 만에 한 번 더 · 평점 4.4").
+  // 추천이 다시 돌아도 그 투표 옵션에 박힌 이유는 변하지 않도록 박제한다. 자유 입력 옵션은 null.
+  reason       String?
   createdAt    DateTime @default(now())
 
   vote       LunchVote             @relation(fields: [lunchVoteId], references: [id], onDelete: Cascade)

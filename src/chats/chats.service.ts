@@ -84,42 +84,113 @@ export class ChatsService {
         : {}),
     };
 
-    const [savedUser, savedAssistant, savedEmotion] = await this.prisma.$transaction(async (tx) => {
-      const u = await tx.chatMessage.create({
-        data: {
-          userId,
-          role: ChatRole.user,
-          intent,
-          content,
-        },
-      });
-      const a = await tx.chatMessage.create({
-        data: {
-          userId,
-          role: ChatRole.assistant,
-          intent,
-          content: turn.reply,
-          metadata: assistantMetadata,
-        },
-      });
-      const e = await tx.emotionLog.create({
-        data: {
-          userId,
-          emotion: turn.emotion.emotion,
-          score: turn.emotion.score,
-          keywords: turn.emotion.keywords,
-          chatMessageId: u.id,
-          note: null,
-        },
-      });
-      return [u, a, e];
-    });
+    const [savedUser, savedAssistant, savedEmotion] = await this.prisma.$transaction(
+      async (tx) => {
+        const u = await tx.chatMessage.create({
+          data: {
+            userId,
+            role: ChatRole.user,
+            intent,
+            content,
+          },
+        });
+        const a = await tx.chatMessage.create({
+          data: {
+            userId,
+            role: ChatRole.assistant,
+            intent,
+            content: turn.reply,
+            metadata: assistantMetadata,
+          },
+        });
+        const e = await tx.emotionLog.create({
+          data: {
+            userId,
+            emotion: turn.emotion.emotion,
+            score: turn.emotion.score,
+            keywords: turn.emotion.keywords,
+            chatMessageId: u.id,
+            note: null,
+          },
+        });
+        return [u, a, e];
+      },
+    );
 
     return {
       userMessage: this.toPublicMessage(savedUser),
       assistantMessage: this.toPublicMessage(savedAssistant),
       emotion: this.toPublicEmotion(savedEmotion),
     };
+  }
+
+  /**
+   * 스케줄러가 시간 도래로 발사한 first-turn 호출.
+   * 사용자의 답이 아직 없으므로 LLM 에게는 "질문만" 던지게 하고, 결과인 assistant 메시지만 DB 에 저장한다.
+   * - userMessage 는 LLM 호출 시점에만 system trigger 문구로 흘리고 DB 에는 저장하지 않는다.
+   * - leftOffice 같은 사용자 답변 기반 메타 데이터는 채우지 않는다(다음 사용자 답변에서 추론).
+   */
+  async scheduledPrompt(
+    userId: string,
+    intent: ChatIntent,
+  ): Promise<{ assistantMessage: PublicChatMessage }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const sinceTodayKst = startOfTodayKstAsUtc();
+    const recentDesc = await this.prisma.chatMessage.findMany({
+      where: { userId, createdAt: { gte: sinceTodayKst } },
+      orderBy: { createdAt: 'desc' },
+      take: 60,
+      select: { role: true, content: true },
+    });
+    const history = recentDesc.reverse();
+
+    // LLM 한테 "지금 이 intent 가 막 발사됐어, 사용자에게 첫 질문을 던져 줘" 라고 신호만 보내는 메시지.
+    // DB 에 저장되는 user 메시지가 아니라, OpenAI messages 배열에만 들어가는 일회성 트리거다.
+    const triggerByIntent: Record<ChatIntent, string> = {
+      free: '[자동 트리거] 사용자와 가볍게 안부를 트는 첫 마디만 던져 줘.',
+      morning_check: '[자동 트리거] 출근 시간이 됐다. 사용자에게 출근했는지 첫 질문을 한 줄로 던져 줘.',
+      lunch_alert: '[자동 트리거] 점심 시간이 됐다. 사용자에게 점심 어떻게 할지 첫 질문을 한 줄로 던져 줘.',
+      lunch_review: '[자동 트리거] 점심 끝났을 시간이다. 사용자에게 점심 어땠는지 첫 질문을 한 줄로 던져 줘.',
+      evening_check:
+        '[자동 트리거] 퇴근 시간이 됐다. 사용자에게 퇴근했는지 첫 질문을 한 줄로 던져 줘. 답변이 없으니 leftOffice 같은 평가는 하지 마.',
+    };
+
+    const turn = await this.openai.runChatTurn(userId, {
+      history: history.map((h) => ({
+        role: h.role === ChatRole.assistant ? 'assistant' : 'user',
+        content: h.content,
+      })),
+      userMessage: triggerByIntent[intent],
+      persona: user.hobby,
+      userName: user.name,
+      intent,
+      mode: 'first-turn',
+    });
+
+    // assistant 메시지만 저장. user 메시지/감정 로그는 만들지 않는다.
+    const assistantMetadata: Prisma.InputJsonValue = {
+      emotion: {
+        type: turn.emotion.emotion,
+        score: turn.emotion.score,
+        keywords: turn.emotion.keywords,
+      },
+      // 나중에 분석/디버깅 시 "이 메시지는 스케줄러 자동 질문이다" 라는 표식을 남긴다.
+      scheduledPrompt: true,
+    };
+
+    const saved = await this.prisma.chatMessage.create({
+      data: {
+        userId,
+        role: ChatRole.assistant,
+        intent,
+        content: turn.reply,
+        metadata: assistantMetadata,
+      },
+    });
+
+    return { assistantMessage: this.toPublicMessage(saved) };
   }
 
   async listRecent(userId: string, limit = 30): Promise<PublicChatMessage[]> {

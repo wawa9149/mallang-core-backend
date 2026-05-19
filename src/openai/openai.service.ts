@@ -8,7 +8,12 @@ import { ConfigService } from '@nestjs/config';
 import { ChatIntent, Emotion } from '@prisma/client';
 import OpenAI from 'openai';
 import { UsersService } from '../users/users.service';
-import type { EmotionAnalysis, MallangChatTurnInput, MallangChatTurnResult } from './openai.types';
+import type {
+  EmotionAnalysis,
+  MallangChatTurnInput,
+  MallangChatTurnMode,
+  MallangChatTurnResult,
+} from './openai.types';
 
 /**
  * 한 번의 chat.completions 호출로 (1) 말랑이 답변 + (2) 사용자 발화의 감정/키워드 분석을
@@ -30,7 +35,10 @@ export class OpenAiService {
     this.defaultModel = config.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
   }
 
-  async runChatTurn(userId: string, input: MallangChatTurnInput): Promise<MallangChatTurnResult> {
+  async runChatTurn(
+    userId: string,
+    input: MallangChatTurnInput,
+  ): Promise<MallangChatTurnResult> {
     const apiKey = await this.users.loadOpenAiKey(userId);
     if (!apiKey) {
       throw new BadRequestException(
@@ -39,7 +47,8 @@ export class OpenAiService {
     }
 
     const client = new OpenAI({ apiKey });
-    const systemPrompt = this.buildSystemPrompt(input);
+    const mode: MallangChatTurnMode = input.mode ?? 'follow-up';
+    const systemPrompt = this.buildSystemPrompt(input, mode);
 
     let completion: OpenAI.Chat.ChatCompletion;
     try {
@@ -51,7 +60,7 @@ export class OpenAiService {
           type: 'json_schema',
           json_schema: {
             name: 'mallang_turn',
-            schema: this.buildResponseSchema(input.intent),
+            schema: this.buildResponseSchema(input.intent, mode),
             strict: true,
           },
         },
@@ -67,7 +76,9 @@ export class OpenAiService {
       });
     } catch (error) {
       this.logger.error('OpenAI call failed', error as Error);
-      throw new ServiceUnavailableException('OpenAI 호출이 실패했어. 잠시 후 다시 시도해 줘.');
+      throw new ServiceUnavailableException(
+        'OpenAI 호출이 실패했어. 잠시 후 다시 시도해 줘.',
+      );
     }
 
     const raw = completion.choices[0]?.message?.content;
@@ -90,29 +101,61 @@ export class OpenAiService {
     return {
       reply: parsed.reply,
       emotion: this.normalizeEmotion(parsed.emotion),
-      leftOffice: input.intent === 'evening_check' ? (parsed.leftOffice ?? null) : null,
+      // 사용자가 실제로 답변한 follow-up 라운드에서만 leftOffice 를 채운다.
+      // first-turn(LLM이 질문만 던지는 라운드)에서는 항상 null 로 둔다.
+      leftOffice:
+        mode === 'follow-up' && input.intent === 'evening_check'
+          ? (parsed.leftOffice ?? null)
+          : null,
       raw,
     };
   }
 
-  private buildSystemPrompt({ persona, userName, intent }: MallangChatTurnInput): string {
+  private buildSystemPrompt(
+    { persona, userName, intent }: MallangChatTurnInput,
+    mode: MallangChatTurnMode,
+  ): string {
     // 페르소나는 '말랑이가 어떤 친구인지'가 아니라 '사용자의 성향'이라는 점에 주의.
     // 말랑이 본인의 톤은 항상 시니컬·무뚝뚝하지만 결국엔 챙겨주는 친구. 페르소나는 그 위에 살짝 가미.
     const personaTouch: Record<MallangChatTurnInput['persona'], string> = {
       rest: '사용자는 휴식·여유를 중요시한다. 무리하지 말고 쉬라고 무심히 던져도 좋다.',
-      workout: '사용자는 활동/운동을 좋아한다. 가끔 "몸 좀 풀어." 같은 식으로 가볍게 툭 던진다.',
-      self_development: '사용자는 자기개발에 진심이다. 작은 진전은 짧게 알아주되, 빈말은 하지 마.',
+      workout:
+        '사용자는 활동/운동을 좋아한다. 가끔 "몸 좀 풀어." 같은 식으로 가볍게 툭 던진다.',
+      self_development:
+        '사용자는 자기개발에 진심이다. 작은 진전은 짧게 알아주되, 빈말은 하지 마.',
     };
 
-    const intentNote: Record<ChatIntent, string> = {
-      free: '사용자가 먼저 말을 걸었다. 무심하게 받아치되 핵심은 짚어 준다.',
-      morning_check:
-        '아침 출근 시간대. "출근했어?" "또 일이야?" 같은 톤으로 컨디션을 가볍게 묻고 끝낸다.',
-      lunch_alert: '점심 시간대. "점심 뭐 먹게.", "투표라도 해봐." 정도로 무심하게 권유한다.',
-      lunch_review: '점심 후 회고. "맛은 있었고?" 식으로 한 줄 묻거나 반응한다.',
-      evening_check:
-        '퇴근 시간대. "갔어?", "아직이야?" 같은 톤으로 묻고, 사용자의 마지막 발화에서 퇴근 완료 여부를 판단해 leftOffice에 boolean으로 채운다. 모호하면 null.',
+    // mode 에 따라 같은 intent 라도 LLM 의 역할이 달라진다.
+    // - first-turn: 말랑이가 먼저 던지는 질문만 만든다. 사용자가 아직 답하지 않았으니 답변 평가는 하지 않는다.
+    // - follow-up: 사용자의 답변에 대한 일반 응답. evening_check 이면 leftOffice 도 함께 추론한다.
+    const intentNoteByMode: Record<
+      MallangChatTurnMode,
+      Record<ChatIntent, string>
+    > = {
+      'first-turn': {
+        free: '사용자가 먼저 말을 걸기 전, 말랑이가 가볍게 안부를 던지는 상황. 한 줄로 끝낸다.',
+        morning_check:
+          '아침 출근 시간이 막 됐다. 사용자가 아직 답을 안 했다. "출근했어?", "또 일이야?" 같은 톤으로 먼저 물어만 본다. 답변 평가는 하지 않는다.',
+        lunch_alert:
+          '점심 시간이 막 됐다. 사용자가 아직 답을 안 했다. "점심 뭐 먹게.", "투표라도 해봐." 같은 톤으로 먼저 권유만 한다.',
+        lunch_review:
+          '점심 끝났을 시간이다. 사용자가 아직 답을 안 했다. "맛은 있었고?" 같은 톤으로 먼저 물어만 본다.',
+        evening_check:
+          '퇴근 시간이 막 됐다. 사용자가 아직 답을 안 했다. "갔어?", "아직이야?" 같은 톤으로 먼저 물어만 본다. 답변이 없는 상태이므로 leftOffice 같은 데이터는 추론하지 마.',
+      },
+      'follow-up': {
+        free: '사용자가 먼저 말을 걸었다. 무심하게 받아치되 핵심은 짚어 준다.',
+        morning_check:
+          '아침 출근 시간대. 사용자 답변에 가볍게 한 줄 반응한다.',
+        lunch_alert:
+          '점심 시간대. 사용자 답변에 가볍게 한 줄 반응한다.',
+        lunch_review:
+          '점심 후 회고. 사용자 답변에 한 줄 반응한다.',
+        evening_check:
+          '퇴근 시간대 후속 응답. 사용자의 마지막 발화에서 퇴근 완료 여부를 판단해 leftOffice 에 boolean 으로 채운다. 모호하면 null. 응답 자체는 "고생했어." 같은 한 줄로 끝낸다.',
+      },
     };
+    const intentNote = intentNoteByMode[mode][intent];
 
     return [
       `너는 사용자 ${userName}의 데스크탑 캐릭터 '말랑이'다.`,
@@ -126,7 +169,7 @@ export class OpenAiService {
       '- 절대 금지: 이모지, 이모티콘, 마크다운, "님/요/습니다" 같은 존댓말, 과한 친절체, 영업·CS 어투, 자기소개.',
       '',
       `【사용자 성향】 ${personaTouch[persona]}`,
-      `【지금 상황】 ${intentNote[intent]}`,
+      `【지금 상황】 ${intentNote}`,
       '',
       '【응답 규칙】',
       '1. reply는 한국어 1~2문장, 30자 내외. 짧고 무뚝뚝하게.',
@@ -137,7 +180,10 @@ export class OpenAiService {
     ].join('\n');
   }
 
-  private buildResponseSchema(intent: ChatIntent): Record<string, unknown> {
+  private buildResponseSchema(
+    intent: ChatIntent,
+    mode: MallangChatTurnMode,
+  ): Record<string, unknown> {
     const required = ['reply', 'emotion'];
     const properties: Record<string, unknown> = {
       reply: { type: 'string' },
@@ -157,12 +203,13 @@ export class OpenAiService {
       },
     };
 
-    if (intent === 'evening_check') {
+    // leftOffice 는 evening_check 의 follow-up(사용자가 답한 라운드)에서만 추론한다.
+    // first-turn(LLM 이 질문만 던지는 라운드)에서는 스키마에서 아예 제외한다.
+    if (intent === 'evening_check' && mode === 'follow-up') {
       required.push('leftOffice');
       properties.leftOffice = {
         type: ['boolean', 'null'],
-        description:
-          '사용자가 이미 퇴근/사무실을 떠난 상태로 보이면 true, 아니면 false. 모르면 null.',
+        description: '사용자가 이미 퇴근/사무실을 떠난 상태로 보이면 true, 아니면 false. 모르면 null.',
       };
     }
 

@@ -14,6 +14,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtUser } from '../auth/strategies/jwt.strategy';
 import { ChatsService, type ChatTurnView, type PublicChatMessage } from './chats.service';
+import { ScheduledPromptDto } from './dto/scheduled-prompt.dto';
 import { SendChatDto } from './dto/send-chat.dto';
 
 @ApiTags('chats')
@@ -29,6 +30,18 @@ export class ChatsController {
   })
   send(@CurrentUser() user: JwtUser, @Body() body: SendChatDto): Promise<ChatTurnView> {
     return this.chats.send(user.id, body.content, body.intent ?? ChatIntent.free);
+  }
+
+  @Post('scheduled-prompt')
+  @ApiOkResponse({
+    description:
+      '스케줄러로 발사된 first-turn 응답. 사용자 발화 없이 말랑이가 먼저 던지는 질문을 만들어 돌려준다. leftOffice 같은 사용자 답변 기반 데이터는 채우지 않는다.',
+  })
+  scheduledPrompt(
+    @CurrentUser() user: JwtUser,
+    @Body() body: ScheduledPromptDto,
+  ): Promise<{ assistantMessage: PublicChatMessage }> {
+    return this.chats.scheduledPrompt(user.id, body.intent);
   }
 
   @Get('recent')

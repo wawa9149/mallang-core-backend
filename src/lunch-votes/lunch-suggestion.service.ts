@@ -8,6 +8,7 @@ import type {
   UserPreference,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { haversineMeters } from './geo.util';
 
 /**
  * 점심 추천 결과 1건.
@@ -530,22 +531,6 @@ function toSuggestion(candidate: CandidateScore): LunchSuggestion {
 function formatDistance(meters: number): string {
   if (meters < 1000) return `${Math.round(meters)}m`;
   return `${(meters / 1000).toFixed(1)}km`;
-}
-
-/**
- * 두 좌표 사이의 Haversine 거리(미터). 점심 추천 범위(수 km)에서는 충분히 정확하다.
- * 외부 지오 라이브러리 없이 직접 구현.
- */
-function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6_371_000;
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
 }
 
 function formatCategory(category: RestaurantCategory): string {
