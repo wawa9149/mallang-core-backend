@@ -3,6 +3,11 @@
 /node_modules
 /build
 
+# pnpm: 로컬 fallback store가 만들어지면 추적되지 않도록 차단.
+# 글로벌 store(~/Library/pnpm/store)를 못 찾을 때 pnpm이 프로젝트 루트에
+# .pnpm-store/를 자동 생성하는데, 캐시이므로 절대 커밋하면 안 된다.
+.pnpm-store/
+
 # Logs
 logs
 *.log
