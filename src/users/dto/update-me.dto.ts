@@ -1,12 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Hobby } from '@prisma/client';
-import {
-  IsEnum,
-  IsOptional,
-  IsString,
-  Matches,
-  MaxLength,
-} from 'class-validator';
+import { IsEnum, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 const TIME_REGEX = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
@@ -57,7 +51,8 @@ export class UpdateMeDto {
 
   @ApiPropertyOptional({
     example: '말랑개발팀',
-    description: '빈 문자열을 보내면 팀 연결만 해제한다. 같은 회사 + 같은 팀명이면 자동으로 합류한다.',
+    description:
+      '빈 문자열을 보내면 팀 연결만 해제한다. 같은 회사 + 같은 팀명이면 자동으로 합류한다.',
   })
   @IsOptional()
   @IsString()

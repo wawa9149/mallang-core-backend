@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Patch,
-  Put,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Patch, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -30,19 +22,13 @@ export class UsersController {
 
   @Patch('me')
   @ApiOkResponse({ description: '프로필 업데이트 후의 내 프로필' })
-  updateMe(
-    @CurrentUser() user: JwtUser,
-    @Body() body: UpdateMeDto,
-  ): Promise<PublicUser> {
+  updateMe(@CurrentUser() user: JwtUser, @Body() body: UpdateMeDto): Promise<PublicUser> {
     return this.users.updateMe(user.id, body);
   }
 
   @Put('me/openai-key')
   @ApiOkResponse({ description: 'OpenAI API 키 등록/교체 후의 내 프로필' })
-  setOpenAiKey(
-    @CurrentUser() user: JwtUser,
-    @Body() body: SetOpenAiKeyDto,
-  ): Promise<PublicUser> {
+  setOpenAiKey(@CurrentUser() user: JwtUser, @Body() body: SetOpenAiKeyDto): Promise<PublicUser> {
     return this.users.setOpenAiKey(user.id, body.apiKey);
   }
 

@@ -51,11 +51,7 @@ export class UsersService {
   }
 
   toPublic(user: User): PublicUser {
-    const {
-      passwordHash: _passwordHash,
-      openaiKeyEnc,
-      ...rest
-    } = user;
+    const { passwordHash: _passwordHash, openaiKeyEnc, ...rest } = user;
     const hasOpenAiKey = Boolean(openaiKeyEnc);
     return {
       ...rest,
@@ -161,8 +157,7 @@ export class UsersService {
         // 이렇게 해야 같은 회사명을 입력한 사용자끼리 같은 Company 레코드에 모이고,
         // 다른 사용자의 회사 이름을 실수로 갈아엎는 일도 막을 수 있다.
         const existing = await this.prisma.company.findFirst({ where: { name: trimmed } });
-        const company =
-          existing ?? (await this.prisma.company.create({ data: { name: trimmed } }));
+        const company = existing ?? (await this.prisma.company.create({ data: { name: trimmed } }));
         if (resolvedCompanyId !== company.id) {
           // 회사가 바뀌면 기존 팀 연결은 자동 해제 (다른 회사 팀에 그대로 두는 건 비논리적).
           resolvedTeamId = null;
@@ -203,9 +198,7 @@ export class UsersService {
     data.company = resolvedCompanyId
       ? { connect: { id: resolvedCompanyId } }
       : { disconnect: true };
-    data.team = resolvedTeamId
-      ? { connect: { id: resolvedTeamId } }
-      : { disconnect: true };
+    data.team = resolvedTeamId ? { connect: { id: resolvedTeamId } } : { disconnect: true };
 
     const updated = await this.prisma.user.update({
       where: { id: userId },

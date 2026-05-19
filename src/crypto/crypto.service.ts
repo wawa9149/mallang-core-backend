@@ -33,11 +33,7 @@ export class CryptoService {
     const cipher = createCipheriv('aes-256-gcm', this.key, iv) as CipherGCM;
     const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
-    return [
-      iv.toString('base64'),
-      tag.toString('base64'),
-      ciphertext.toString('base64'),
-    ].join(':');
+    return [iv.toString('base64'), tag.toString('base64'), ciphertext.toString('base64')].join(':');
   }
 
   decrypt(payload: string): string {

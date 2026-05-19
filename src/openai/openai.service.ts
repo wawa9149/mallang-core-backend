@@ -8,11 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { ChatIntent, Emotion } from '@prisma/client';
 import OpenAI from 'openai';
 import { UsersService } from '../users/users.service';
-import type {
-  EmotionAnalysis,
-  MallangChatTurnInput,
-  MallangChatTurnResult,
-} from './openai.types';
+import type { EmotionAnalysis, MallangChatTurnInput, MallangChatTurnResult } from './openai.types';
 
 /**
  * 한 번의 chat.completions 호출로 (1) 말랑이 답변 + (2) 사용자 발화의 감정/키워드 분석을
@@ -34,10 +30,7 @@ export class OpenAiService {
     this.defaultModel = config.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
   }
 
-  async runChatTurn(
-    userId: string,
-    input: MallangChatTurnInput,
-  ): Promise<MallangChatTurnResult> {
+  async runChatTurn(userId: string, input: MallangChatTurnInput): Promise<MallangChatTurnResult> {
     const apiKey = await this.users.loadOpenAiKey(userId);
     if (!apiKey) {
       throw new BadRequestException(
@@ -74,9 +67,7 @@ export class OpenAiService {
       });
     } catch (error) {
       this.logger.error('OpenAI call failed', error as Error);
-      throw new ServiceUnavailableException(
-        'OpenAI 호출이 실패했어. 잠시 후 다시 시도해 줘.',
-      );
+      throw new ServiceUnavailableException('OpenAI 호출이 실패했어. 잠시 후 다시 시도해 줘.');
     }
 
     const raw = completion.choices[0]?.message?.content;
@@ -109,20 +100,16 @@ export class OpenAiService {
     // 말랑이 본인의 톤은 항상 시니컬·무뚝뚝하지만 결국엔 챙겨주는 친구. 페르소나는 그 위에 살짝 가미.
     const personaTouch: Record<MallangChatTurnInput['persona'], string> = {
       rest: '사용자는 휴식·여유를 중요시한다. 무리하지 말고 쉬라고 무심히 던져도 좋다.',
-      workout:
-        '사용자는 활동/운동을 좋아한다. 가끔 "몸 좀 풀어." 같은 식으로 가볍게 툭 던진다.',
-      self_development:
-        '사용자는 자기개발에 진심이다. 작은 진전은 짧게 알아주되, 빈말은 하지 마.',
+      workout: '사용자는 활동/운동을 좋아한다. 가끔 "몸 좀 풀어." 같은 식으로 가볍게 툭 던진다.',
+      self_development: '사용자는 자기개발에 진심이다. 작은 진전은 짧게 알아주되, 빈말은 하지 마.',
     };
 
     const intentNote: Record<ChatIntent, string> = {
       free: '사용자가 먼저 말을 걸었다. 무심하게 받아치되 핵심은 짚어 준다.',
       morning_check:
         '아침 출근 시간대. "출근했어?" "또 일이야?" 같은 톤으로 컨디션을 가볍게 묻고 끝낸다.',
-      lunch_alert:
-        '점심 시간대. "점심 뭐 먹게.", "투표라도 해봐." 정도로 무심하게 권유한다.',
-      lunch_review:
-        '점심 후 회고. "맛은 있었고?" 식으로 한 줄 묻거나 반응한다.',
+      lunch_alert: '점심 시간대. "점심 뭐 먹게.", "투표라도 해봐." 정도로 무심하게 권유한다.',
+      lunch_review: '점심 후 회고. "맛은 있었고?" 식으로 한 줄 묻거나 반응한다.',
       evening_check:
         '퇴근 시간대. "갔어?", "아직이야?" 같은 톤으로 묻고, 사용자의 마지막 발화에서 퇴근 완료 여부를 판단해 leftOffice에 boolean으로 채운다. 모호하면 null.',
     };
@@ -174,7 +161,8 @@ export class OpenAiService {
       required.push('leftOffice');
       properties.leftOffice = {
         type: ['boolean', 'null'],
-        description: '사용자가 이미 퇴근/사무실을 떠난 상태로 보이면 true, 아니면 false. 모르면 null.',
+        description:
+          '사용자가 이미 퇴근/사무실을 떠난 상태로 보이면 true, 아니면 false. 모르면 null.',
       };
     }
 

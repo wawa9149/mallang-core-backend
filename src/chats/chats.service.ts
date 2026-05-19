@@ -84,38 +84,36 @@ export class ChatsService {
         : {}),
     };
 
-    const [savedUser, savedAssistant, savedEmotion] = await this.prisma.$transaction(
-      async (tx) => {
-        const u = await tx.chatMessage.create({
-          data: {
-            userId,
-            role: ChatRole.user,
-            intent,
-            content,
-          },
-        });
-        const a = await tx.chatMessage.create({
-          data: {
-            userId,
-            role: ChatRole.assistant,
-            intent,
-            content: turn.reply,
-            metadata: assistantMetadata,
-          },
-        });
-        const e = await tx.emotionLog.create({
-          data: {
-            userId,
-            emotion: turn.emotion.emotion,
-            score: turn.emotion.score,
-            keywords: turn.emotion.keywords,
-            chatMessageId: u.id,
-            note: null,
-          },
-        });
-        return [u, a, e];
-      },
-    );
+    const [savedUser, savedAssistant, savedEmotion] = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.chatMessage.create({
+        data: {
+          userId,
+          role: ChatRole.user,
+          intent,
+          content,
+        },
+      });
+      const a = await tx.chatMessage.create({
+        data: {
+          userId,
+          role: ChatRole.assistant,
+          intent,
+          content: turn.reply,
+          metadata: assistantMetadata,
+        },
+      });
+      const e = await tx.emotionLog.create({
+        data: {
+          userId,
+          emotion: turn.emotion.emotion,
+          score: turn.emotion.score,
+          keywords: turn.emotion.keywords,
+          chatMessageId: u.id,
+          note: null,
+        },
+      });
+      return [u, a, e];
+    });
 
     return {
       userMessage: this.toPublicMessage(savedUser),
