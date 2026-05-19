@@ -1,7 +1,9 @@
 {
   "extends": "./tsconfig.json",
-  // scripts/ 는 ts-node로만 실행되는 일회성 도구(예: swagger:export)라서 빌드 산출물에 포함시키지 않는다.
-  // 빌드 대상에 들어가면 dist 구조가 dist/{src,scripts}/... 로 분기되면서
-  // dist/main.js 가 사라지고 dist/src/main.js 가 되는 함정이 있다.
-  "exclude": ["node_modules", "test", "dist", "scripts", "**/*spec.ts"]
+  // Nest 빌드는 항상 src/ 만 컴파일한다.
+  // include를 명시하지 않으면 baseUrl 아래의 모든 .ts (prisma/seed.ts, scripts/*.ts 등)가 포함되어
+  // dist 구조가 dist/{src,prisma,scripts}/... 로 분기되고 dist/main.js 가 사라지는 함정이 있다.
+  // 추후 새로운 .ts 도구가 root에 추가돼도 빌드에 끼어들지 않게 include로 못 박는다.
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
 }
