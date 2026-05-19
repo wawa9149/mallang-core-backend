@@ -28,11 +28,12 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 FROM deps AS builder
 # 소스 복사 후 Prisma 클라이언트 생성 + Nest 빌드.
 # 빌드 산출물은 dist/ 와 (필요시) node_modules의 .prisma/ 디렉토리에 들어간다.
+# scripts/ 는 ts-node로만 실행되는 도구라 컨테이너에 포함시키지 않는다.
 COPY tsconfig*.json nest-cli.json ./
 COPY src ./src
-COPY scripts ./scripts
 RUN pnpm prisma:generate \
-    && pnpm build
+    && pnpm build \
+    && test -f dist/main.js  # 산출물이 dist/main.js로 떨어졌는지 즉시 검증해 회귀 방지.
 
 
 FROM base AS runner
