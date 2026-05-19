@@ -28,6 +28,18 @@ export class CreateLunchVoteDto {
   options!: string[];
 
   @ApiPropertyOptional({
+    type: [String],
+    description:
+      'options 인덱스와 1:1로 매칭되는 식당 ID 배열. 추천 시스템이 만든 옵션에만 채워지며, 자유 입력 옵션 자리는 빈 문자열을 둔다. 전체 옵션이 자유 입력이면 생략 가능.',
+    example: ['ckqv2x...', '', 'ckqw5y...'],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  restaurantIds?: string[];
+
+  @ApiPropertyOptional({
     example: '2026-05-18T03:00:00.000Z',
     description: '마감 시각 (ISO-8601). 비우면 수동 마감만 가능.',
   })
