@@ -1,5 +1,17 @@
 version: '3.9'
 
+# Mallang Core 백엔드 + DB 컨테이너 묶음.
+#
+# 운영 서버에서의 권장 배치:
+#   - 외부 트래픽은 호스트의 nginx(443/80) → 127.0.0.1:8101(backend 컨테이너)
+#   - Postgres 포트는 호스트의 127.0.0.1만 바인딩해서 외부 인터넷에 노출하지 않는다(9001).
+#   - .env 파일은 서버에 따로 두고 env_file로 주입(이미지에는 포함되지 않음).
+#
+# 서버 포트 규칙:
+#   - 백엔드: 8101 (컨테이너 내부 listen + 호스트 바인딩 모두 8101로 통일)
+#   - Postgres: 호스트 바인딩만 9001 (컨테이너 내부는 표준 5432 그대로,
+#     백엔드 컨테이너는 같은 compose 네트워크에서 postgres:5432로 접근)
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,8 +21,10 @@ services:
       POSTGRES_USER: mallang
       POSTGRES_PASSWORD: mallang
       POSTGRES_DB: mallang
+    # 호스트의 127.0.0.1:9001 → 컨테이너 내부 5432로 매핑. 외부 인터넷에는 노출하지 않는다.
+    # 백엔드 컨테이너는 같은 compose 네트워크에서 `postgres:5432`로 접근한다(호스트 포트와 무관).
     ports:
-      - '5432:5432'
+      - '127.0.0.1:9001:5432'
     volumes:
       - mallang-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -18,6 +32,31 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mallang-core-backend:latest
+    container_name: mallang-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 서버에 둔 .env 파일의 값을 그대로 컨테이너에 주입.
+    # DATABASE_URL은 아래 environment에서 override해 컨테이너 네트워크 호스트를 가리키게 한다.
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # 컨테이너 내부 listen 포트. NestJS가 process.env.PORT를 읽어 그 포트로 listen한다.
+      PORT: '8101'
+      # 호스트 nginx에서 proxy_pass http://127.0.0.1:8101 으로 들어오므로 컨테이너 포트도 8101.
+      # DATABASE_URL을 .env의 localhost 기준에서 컨테이너 네트워크의 서비스명(postgres)으로 override한다.
+      DATABASE_URL: postgresql://mallang:mallang@postgres:5432/mallang?schema=public
+    # nginx가 같은 호스트에 있다고 가정해 127.0.0.1만 바인딩. 외부 인터넷에서 직접 접근 차단.
+    ports:
+      - '127.0.0.1:8101:8101'
 
 volumes:
   mallang-postgres-data:

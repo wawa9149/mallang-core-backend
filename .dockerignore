@@ -1,0 +1,24 @@
+# 빌드 컨텍스트에서 제외해 이미지가 가벼워지고 비밀이 새 나가지 않게 한다.
+
+# 빌드/실행 산출물
+node_modules
+.pnpm-store
+dist
+coverage
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+
+# Git
+.git
+.gitignore
+
+# 환경/비밀 (런타임에 env_file 로만 주입)
+.env
+.env.*
+!.env.example
+
+# 로컬 전용
+*.log
