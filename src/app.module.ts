@@ -8,6 +8,7 @@ import { CryptoModule } from './crypto/crypto.module';
 import { LunchVotesModule } from './lunch-votes/lunch-votes.module';
 import { OpenAiModule } from './openai/openai.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RestaurantsModule } from './restaurants/restaurants.module';
 import { TeamsModule } from './teams/teams.module';
 import { UsersModule } from './users/users.module';
 
@@ -22,6 +23,7 @@ import { UsersModule } from './users/users.module';
     CryptoModule,
     UsersModule,
     AuthModule,
+    RestaurantsModule,
     TeamsModule,
     LunchVotesModule,
     OpenAiModule,
