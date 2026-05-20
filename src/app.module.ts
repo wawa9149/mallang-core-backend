@@ -10,6 +10,7 @@ import { OpenAiModule } from './openai/openai.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RestaurantsModule } from './restaurants/restaurants.module';
 import { TeamsModule } from './teams/teams.module';
+import { TtsModule } from './tts/tts.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -28,6 +29,7 @@ import { UsersModule } from './users/users.module';
     LunchVotesModule,
     OpenAiModule,
     ChatsModule,
+    TtsModule,
   ],
   controllers: [AppController],
 })
