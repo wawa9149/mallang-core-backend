@@ -33,6 +33,11 @@ export interface LunchVoteOptionRestaurantView {
   address: string | null;
   /** 회사 좌표에서의 직선 거리(미터). team 좌표나 식당 좌표가 없으면 null. */
   distanceMeters: number | null;
+  /**
+   * 식당 상세 페이지(공유 링크) URL. 카카오 소스이고 externalId 가 있을 때만 채워진다.
+   * 시드 데이터처럼 외부 ID 가 없는 식당은 null 이며, 프론트는 이때 이름/주소 검색 URL 로 폴백한다.
+   */
+  placeUrl: string | null;
 }
 
 export interface LunchVoteOptionView {
@@ -380,6 +385,10 @@ export class LunchVotesService {
                     ),
                   )
                 : null,
+            placeUrl: buildPlaceUrl(
+              option.restaurant.source,
+              option.restaurant.externalId,
+            ),
           }
         : null;
 
@@ -409,6 +418,22 @@ export class LunchVotesService {
       totalVotes,
     };
   }
+}
+
+/**
+ * 식당 row 의 source/externalId 로 외부 상세 페이지(공유 링크) URL 을 만든다.
+ * - 카카오에서 가져온 식당: `https://place.map.kakao.com/{externalId}` 형태의 정식 상세 페이지.
+ * - 그 외 소스(시드 등)나 externalId 가 없는 경우 null. 프론트는 검색 URL 로 폴백한다.
+ */
+function buildPlaceUrl(
+  source: string,
+  externalId: string | null,
+): string | null {
+  if (!externalId) return null;
+  if (source === 'kakao') {
+    return `https://place.map.kakao.com/${encodeURIComponent(externalId)}`;
+  }
+  return null;
 }
 
 /**
