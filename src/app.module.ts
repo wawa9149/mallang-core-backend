@@ -13,6 +13,7 @@ import { SttModule } from './stt/stt.module';
 import { TeamsModule } from './teams/teams.module';
 import { TtsModule } from './tts/tts.module';
 import { UsersModule } from './users/users.module';
+import { VisitRecordsModule } from './visit-records/visit-records.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { UsersModule } from './users/users.module';
     ChatsModule,
     TtsModule,
     SttModule,
+    VisitRecordsModule,
   ],
   controllers: [AppController],
 })
