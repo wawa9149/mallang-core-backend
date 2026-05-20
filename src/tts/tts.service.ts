@@ -70,21 +70,32 @@ export class TtsService {
    * 텍스트를 Clova Voice 에 보내 mp3 binary 를 받아 온다.
    * 호출자는 응답 Buffer 를 그대로 StreamableFile 로 흘려 보낸다.
    */
-  async synthesize(text: string): Promise<Buffer> {
+  async synthesize(
+    text: string,
+    style?: { emotion?: string; score?: number },
+  ): Promise<Buffer> {
     if (!this.isEnabled()) {
       throw new ServiceUnavailableException(
         'TTS_NOT_CONFIGURED: 서버에 Clova Voice 키가 설정되어 있지 않다.',
       );
     }
 
+    const emotionParams = this.mapEmotionToClova(style?.emotion);
+
     const params = new URLSearchParams();
     params.set('speaker', this.speaker);
     params.set('text', text);
-    params.set('speed', this.speed);
+    params.set('speed', emotionParams.speed ?? this.speed);
     params.set('pitch', this.pitch);
     params.set('volume', this.volume);
     params.set('alpha', this.alpha);
     params.set('format', 'mp3');
+    if (emotionParams.emotion !== undefined) {
+      params.set('emotion', String(emotionParams.emotion));
+    }
+    if (emotionParams.emotionStrength !== undefined) {
+      params.set('emotion-strength', String(emotionParams.emotionStrength));
+    }
 
     let response: Response;
     try {
@@ -135,6 +146,37 @@ export class TtsService {
     if (!Number.isFinite(n)) return fallback;
     const clamped = Math.max(-5, Math.min(5, Math.round(n)));
     return String(clamped);
+  }
+
+  /**
+   * 말랑이 감정을 Clova Voice API 파라미터로 매핑한다.
+   *
+   * Clova emotion: 0=neutral, 1=sad, 2=happy, 3=angry
+   * emotion-strength: 항상 2(강함) 고정.
+   * pitch/alpha: 절대 건드리지 않는다.
+   * speed: tired일 때만 -2 (느리게). 나머지는 .env 기본값 사용.
+   */
+  private mapEmotionToClova(
+    emotion?: string,
+  ): {
+    emotion?: number;
+    emotionStrength?: number;
+    speed?: string;
+  } {
+    if (!emotion || emotion === 'neutral') return {};
+
+    switch (emotion) {
+      case 'happy':
+        return { emotion: 2, emotionStrength: 2 };
+      case 'sad':
+        return { emotion: 1, emotionStrength: 2 };
+      case 'angry':
+        return { emotion: 3, emotionStrength: 2 };
+      case 'tired':
+        return { speed: '-2' };
+      default:
+        return {};
+    }
   }
 
   private async safeReadText(response: Response): Promise<string> {

@@ -62,9 +62,12 @@ export class TtsController {
     }
 
     this.logger.log(
-      `[tts] /speak user=${user.id} textLen=${dto.text.length}`,
+      `[tts] /speak user=${user.id} textLen=${dto.text.length} emotion=${dto.emotion ?? '-'} score=${dto.emotionScore ?? '-'}`,
     );
-    const audio = await this.tts.synthesize(dto.text);
+    const audio = await this.tts.synthesize(dto.text, {
+      emotion: dto.emotion,
+      score: dto.emotionScore,
+    });
     this.logger.log(
       `[tts] /speak ok user=${user.id} bytes=${audio.byteLength}`,
     );

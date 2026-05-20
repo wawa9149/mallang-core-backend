@@ -1,5 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class SpeakDto {
   @ApiProperty({
@@ -9,7 +18,28 @@ export class SpeakDto {
   })
   @IsString()
   @MinLength(1)
-  // Clova Voice 는 한 호출당 최대 5000자(공식 문서). 우리는 채팅 한 줄 단위만 보내므로 충분히 줄여 둔다.
   @MaxLength(1000)
   text!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'LLM 이 추론한 말랑이의 현재 감정. Clova Voice emotion 파라미터에 매핑된다.',
+    enum: ['happy', 'sad', 'angry', 'neutral', 'tired'],
+    example: 'happy',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['happy', 'sad', 'angry', 'neutral', 'tired'])
+  emotion?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '감정 강도 (0~100). EmotionLog.score 그대로 전달. 현재는 사용하지 않지만 향후 세밀 제어 확장용.',
+    example: 70,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  emotionScore?: number;
 }
