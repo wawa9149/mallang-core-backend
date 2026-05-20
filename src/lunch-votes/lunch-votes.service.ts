@@ -72,6 +72,25 @@ export interface LunchVoteView {
 /** 투표 생성 시 명시적 closesAt이 없으면 적용되는 디폴트 마감 윈도우. */
 const DEFAULT_VOTE_WINDOW_MS = 10 * 60 * 1000;
 
+/**
+ * "lunch_alert 윈도우" 길이.
+ *
+ * 오늘 우리 팀의 점심 투표가 이미 존재하더라도, 아래 조건을 모두 만족할 때는
+ * 옵션을 다시 그려준다(replan).
+ *  1) 투표가 아직 open 상태
+ *  2) 아직 아무도 표를 던지지 않은 상태(총 0표)
+ *  3) 현재 시각이 [lunchTime - REPLAN_WINDOW_MS, lunchTime] 사이
+ *
+ * 동기: 팀원 중 누군가가 점심 시간 한참 전(예: 오전)에 별창을 띄워서 투표가
+ * 박제되어 버리면, 본인이 점심 직전에 알러지/dietary 등을 바꿔도 옵션에 반영되지 않는다.
+ * lunch_alert 시점(점심 10분 전)에 별창이 자동으로 떠서 ensureAuto 가 다시 호출되므로,
+ * 이 시점에 한 번 더 그날의 최신 사용자 선호 기준으로 옵션을 갱신하면 자연스럽다.
+ *
+ * 윈도우를 20분으로 잡으면 사용자가 시간 설정 변경 등으로 점심 시간이 살짝 어긋나도
+ * 안전하게 잡힌다.
+ */
+const REPLAN_WINDOW_MS = 20 * 60 * 1000;
+
 type LunchVoteWithOptions = LunchVote & {
   team: Team;
   options: (LunchVoteOption & {
@@ -136,7 +155,8 @@ export class LunchVotesService {
       };
     }
 
-    // 오늘 KST 기준 우리 팀의 가장 최근 투표를 본다. 이미 있으면 그걸 그대로 반환.
+    // 오늘 KST 기준 우리 팀의 가장 최근 투표를 본다. 이미 있으면 그걸 그대로 반환(=멱등).
+    // 단, lunch_alert 윈도우 안이고 아직 0표라면 옵션만 새로 그려서 그날의 최신 사용자 선호를 반영한다.
     const todayStart = startOfTodayKst();
     const existing = await this.prisma.lunchVote.findFirst({
       where: { teamId: me.teamId, createdAt: { gte: todayStart } },
@@ -145,7 +165,11 @@ export class LunchVotesService {
     });
     if (existing) {
       const refreshed = await this.autoCloseIfExpired(existing);
-      return { vote: this.toView(refreshed, userId), notes: [] };
+      const replanned = await this.maybeReplanOptions(refreshed, {
+        userId: me.id,
+        lunchTime: me.lunchTime,
+      });
+      return { vote: this.toView(replanned.vote, userId), notes: replanned.notes };
     }
 
     // 결정론 추천 받기.
@@ -154,7 +178,7 @@ export class LunchVotesService {
       return { vote: null, notes: suggestion.notes };
     }
 
-    const closesAt = lunchTimeTodayKst(me.lunchTime);
+    const closesAt = await this.getTeamEarliestLunchTimeTodayKst(me.teamId);
     const created = await this.prisma.lunchVote.create({
       data: {
         teamId: me.teamId,
@@ -315,6 +339,101 @@ export class LunchVotesService {
   }
 
   /**
+   * 오늘 우리 팀 투표의 옵션을 "lunch_alert 윈도우 안 + 0표" 조건일 때만 다시 그린다.
+   *
+   *  - status 가 closed/open 둘 다 호출되지만, closed 면 즉시 그대로 반환한다.
+   *  - 0표 검증은 두 번 한다: 메서드 진입 시 + 트랜잭션 안에서 한 번 더.
+   *    그 사이에 누군가 표를 던졌다면 옵션을 건드리지 않는다.
+   *  - 추천이 0개를 돌려주면 기존 옵션을 그대로 둔다(빈 투표가 되는 사용자 경험을 막기 위함).
+   *  - 옵션 교체와 함께 closesAt 도 그날의 최신 lunchTime 으로 갱신한다.
+   *    사용자가 점심 시간 자체를 변경했을 수도 있어서 이 시점에 맞춰 두면 자연스럽다.
+   *
+   * 반환: 갱신된 vote(또는 갱신하지 않은 vote) 와 함께, suggestion 의 notes 를 그대로 전달한다.
+   * 호출 측은 그 notes 를 사용자 UI 에 안내 문구로 띄울 수 있다.
+   */
+  private async maybeReplanOptions(
+    vote: LunchVoteWithOptions,
+    me: { userId: string; lunchTime: string },
+  ): Promise<{ vote: LunchVoteWithOptions; notes: string[] }> {
+    if (vote.status !== 'open') return { vote, notes: [] };
+
+    // 1차 검증: 메서드 진입 시 0표인지.
+    const totalVotes = vote.options.reduce((sum, opt) => sum + opt.votes.length, 0);
+    if (totalVotes > 0) return { vote, notes: [] };
+
+    // 점심 시간 ±윈도우 안에 들어왔는지.
+    const lunchTime = lunchTimeTodayKst(me.lunchTime);
+    const now = Date.now();
+    const inWindow =
+      now >= lunchTime.getTime() - REPLAN_WINDOW_MS && now <= lunchTime.getTime();
+    if (!inWindow) return { vote, notes: [] };
+
+    // 새 추천을 받아온다. 추천이 0개면 기존 그대로 둔다.
+    const suggestion = await this.suggestions.suggest(me.userId);
+    if (suggestion.items.length === 0) {
+      return { vote, notes: suggestion.notes };
+    }
+
+    // 트랜잭션 내에서 다시 한 번 "여전히 open + 0표" 인지 확인하고 옵션을 교체한다.
+    // 그 사이 누군가 표를 던졌으면 사용자 표 의도를 보호하기 위해 교체를 포기한다.
+    const replanned = await this.prisma.$transaction(async (tx) => {
+      const fresh = await tx.lunchVote.findUnique({
+        where: { id: vote.id },
+        include: { options: { include: { votes: true } } },
+      });
+      if (!fresh) return null;
+      if (fresh.status !== 'open') return null;
+      const totalNow = fresh.options.reduce((sum, opt) => sum + opt.votes.length, 0);
+      if (totalNow > 0) return null;
+
+      // 기존 옵션 모두 삭제(cascade 로 0개의 표가 같이 정리되지만 어차피 0표라 무해).
+      await tx.lunchVoteOption.deleteMany({ where: { lunchVoteId: vote.id } });
+
+      return tx.lunchVote.update({
+        where: { id: vote.id },
+        data: {
+          // 점심 시간 자체가 변경됐을 가능성을 반영해 마감 시각도 최신으로.
+          closesAt: lunchTime,
+          options: {
+            create: suggestion.items.map((item) => ({
+              label: item.name,
+              restaurantId: item.restaurantId,
+              reason: item.reason,
+            })),
+          },
+        },
+        include: VOTE_INCLUDE,
+      });
+    });
+
+    if (!replanned) {
+      // 그 사이 누가 표를 던졌거나 vote 가 close 됐다면 원본 그대로.
+      return { vote, notes: [] };
+    }
+    return { vote: replanned, notes: suggestion.notes };
+  }
+
+  /**
+   * 자동 점심 투표의 마감 시각은 "첫 요청자"가 아니라 팀원 중 가장 빠른 lunchTime 기준으로 잡는다.
+   *
+   * 프론트 스케줄러도 팀원 중 가장 빠른 lunchTime - 10분에 모두에게 lunch_alert 를 띄운다.
+   * 이때 여러 PC가 거의 동시에 POST /lunch-votes/auto 를 호출할 수 있는데, 늦은 점심 시간 사용자의
+   * 요청이 먼저 도착하더라도 투표 마감이 늦은 시간으로 밀리면 정책과 어긋난다.
+   * 따라서 생성 시점에서도 팀 전체의 가장 빠른 lunchTime 을 다시 계산해 서버 측 진실로 사용한다.
+   */
+  private async getTeamEarliestLunchTimeTodayKst(teamId: string): Promise<Date> {
+    const members = await this.prisma.user.findMany({
+      where: { teamId },
+      select: { lunchTime: true },
+    });
+    const lunchTimes = members
+      .map((member) => member.lunchTime)
+      .filter(isValidHHMM)
+      .sort(compareHHMM);
+    return lunchTimeTodayKst(lunchTimes[0] ?? '12:30');
+  }
+
+  /**
    * closesAt이 지난 open 투표를 close로 전환하고 winner를 확정한다.
    * 이미 close거나, closesAt이 없거나 아직 안 지난 경우는 그대로 반환.
    */
@@ -470,4 +589,22 @@ function lunchTimeTodayKst(hhmm: string): Date {
     Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate(), h, m, 0, 0) -
       KST_OFFSET_MS,
   );
+}
+
+function isValidHHMM(value: string | null | undefined): value is string {
+  if (!value) return false;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return false;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+}
+
+function compareHHMM(a: string, b: string): number {
+  return toMinutes(a) - toMinutes(b);
+}
+
+function toMinutes(value: string): number {
+  const [h, m] = value.split(':').map(Number);
+  return h * 60 + m;
 }
