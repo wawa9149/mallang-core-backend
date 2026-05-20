@@ -40,11 +40,15 @@ export class UsersService {
       throw new ConflictException('EMAIL_TAKEN');
     }
 
+    // 닉네임은 온보딩에서 사용자가 직접 채우게 한다.
+    // 과거에는 빈 값일 때 email 의 local-part(@ 앞부분) 를 자동으로 박았는데,
+    // 사용자가 의도하지 않은 닉네임으로 굳어져 버려 그 동작을 제거했다.
+    // schema 상 name 은 NOT NULL 이라 우선 빈 문자열로 두고, updateMe 가 첫 PATCH 에서 채운다.
     const user = await this.prisma.user.create({
       data: {
         email,
         passwordHash: input.passwordHash,
-        name: input.name ?? email.split('@')[0],
+        name: input.name?.trim() ?? '',
       },
     });
     return this.toPublic(user);
