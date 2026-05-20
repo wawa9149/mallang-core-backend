@@ -9,6 +9,7 @@ import { LunchVotesModule } from './lunch-votes/lunch-votes.module';
 import { OpenAiModule } from './openai/openai.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RestaurantsModule } from './restaurants/restaurants.module';
+import { SttModule } from './stt/stt.module';
 import { TeamsModule } from './teams/teams.module';
 import { TtsModule } from './tts/tts.module';
 import { UsersModule } from './users/users.module';
@@ -30,6 +31,7 @@ import { UsersModule } from './users/users.module';
     OpenAiModule,
     ChatsModule,
     TtsModule,
+    SttModule,
   ],
   controllers: [AppController],
 })
