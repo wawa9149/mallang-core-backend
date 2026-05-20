@@ -66,10 +66,25 @@ interface CandidateScore {
 const RECENT_VISIT_BLOCK_DAYS = 7;
 /** 어제(24h) 다녀온 카테고리는 soft 패널티만 부여. */
 const CATEGORY_COOLDOWN_HOURS = 24;
-/** 결정론 단계에서 LLM 단계(추후 Phase 3)에 넘기기 위해 모아두는 후보 수. */
-const TOP_K = 20;
+/**
+ * 결정론 단계에서 LLM 단계(추후 Phase 3)에 넘기기 위해 모아두는 후보 수.
+ * 30 으로 넉넉히 잡아 점수 jitter 와 다양성 룰이 풀에서 폭넓게 섞일 여지를 준다.
+ * (작게 잡으면 점수 상위 식당이 매번 비슷하게 뽑혀 jitter 효과가 묻힌다.)
+ */
+const TOP_K = 30;
 /** 최종 사용자에게 보여줄 추천 카드 수. */
 const FINAL_PICKS = 3;
+/**
+ * 점수에 더할 균등분포 노이즈의 진폭(±SCORE_JITTER 범위).
+ *
+ * 추천 점수는 0~1 범위 가중합이라 동률·근사값이 많이 생기는데, 그러면 다양성 룰
+ * (같은 카테고리 1개) 만으로는 매번 같은 식당만 뽑혀서 사용자는 "다 가까운 곳만 나온다"
+ * 처럼 느낀다. ±0.05 정도의 약한 jitter 를 줘서 점수 근사 후보 사이의 순서를
+ * 매번 살짝 섞고, 좋은 점수의 식당이 무조건 1등을 가져가는 결정론적 흐름을 깬다.
+ *
+ * 너무 키우면 약한 후보가 끼어들어 추천 품질이 떨어지므로 0.05 정도가 안전한 상한.
+ */
+const SCORE_JITTER = 0.05;
 
 const PRICE_TIER_RANK: Record<PriceTier, number> = {
   low: 0,
@@ -139,6 +154,9 @@ export class LunchSuggestionService {
 
     // Hard filter
     const surviving = restaurantsWithDistance.filter(({ r, distance }) => {
+      // 디저트·베이커리·한과류는 점심 한 끼 식사로 적합하지 않으므로 카테고리 단계에서 차단한다.
+      // (RestaurantSyncService.mapCategory 가 이미 그 종류를 'dessert' 로 라벨링해서 들어온다.)
+      if (r.category === 'dessert') return false;
       if (teamHasCoords) {
         // 좌표 없는 시드 데이터는 좌표 있는 후보들이 풍부할 때 의도적으로 제외.
         if (distance === null) return false;
@@ -182,12 +200,15 @@ export class LunchSuggestionService {
         daysSinceLastVisit,
         cooldownCategories,
       });
-      const score =
+      const baseScore =
         0.4 * breakdown.category +
         0.2 * breakdown.rating +
         0.2 * breakdown.price +
         0.2 * breakdown.freshness +
         breakdown.cooldownPenalty;
+      // 점수 근사 후보들이 매번 같은 순서로 정렬되지 않게 약한 균등 jitter 를 더한다.
+      // (Math.random() - 0.5) * 2 * SCORE_JITTER ∈ [-SCORE_JITTER, +SCORE_JITTER]
+      const score = baseScore + (Math.random() - 0.5) * 2 * SCORE_JITTER;
       return {
         restaurant: r,
         score,
@@ -549,6 +570,10 @@ function formatCategory(category: RestaurantCategory): string {
       return '분식';
     case 'cafe':
       return '브런치/카페';
+    case 'dessert':
+      // 디저트는 hard filter 에서 차단되므로 정상 흐름에서는 도달하지 않지만,
+      // 마이그레이션 race 등 예외 케이스를 위해 안전 라벨을 준비한다.
+      return '디저트';
     default:
       return '추천 메뉴';
   }

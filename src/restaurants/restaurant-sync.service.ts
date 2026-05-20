@@ -139,12 +139,42 @@ export class RestaurantSyncService {
  * 카카오의 자유 텍스트 카테고리 경로(예: "음식점 > 한식 > 국밥")를 우리 RestaurantCategory enum으로
  * 매핑한다. 매칭 우선순위는 가장 구체적인 토큰 → 일반 토큰 순.
  *
+ * dessert 분기를 가장 먼저 두는 이유:
+ *  - 카카오는 "음식점 > 한식 > 떡,한과" 처럼 dessert/한과 종류도 상위 카테고리에 '한식' 토큰을
+ *    포함시켜 내려준다. 만약 korean 분기를 먼저 두면 떡·한과가 한식으로 잡혀 점심 후보에 섞인다.
+ *  - 동일하게 "디저트 카페", "베이커리 카페" 같은 표기는 cafe 분기에 흡수돼 일반 카페와 구분이
+ *    안 되는 문제가 있었다.
+ *  → dessert 키워드를 다른 어떤 분기보다 먼저 잡아서 명확하게 분리한다.
+ *
  * 매칭 안 되면 'etc'.
  */
 export function mapCategory(categoryName: string): RestaurantCategory {
   const lower = categoryName.toLowerCase();
   const has = (token: string) => lower.includes(token);
 
+  // dessert: 식사가 아닌 메뉴 전문점. 점심 추천 hard filter 에서 제외된다.
+  if (
+    has('떡,한과') ||
+    has('한과') ||
+    has('디저트') ||
+    has('베이커리') ||
+    has('케이크') ||
+    has('도넛') ||
+    has('도너츠') ||
+    has('아이스크림') ||
+    has('젤라또') ||
+    has('마카롱') ||
+    has('타르트') ||
+    has('쿠키') ||
+    has('초콜릿') ||
+    has('전통차') ||
+    has('베이글') ||
+    has('크로플') ||
+    has('크레페') ||
+    has('스무디')
+  ) {
+    return 'dessert';
+  }
   if (
     has('일식') ||
     has('스시') ||
@@ -185,14 +215,9 @@ export function mapCategory(categoryName: string): RestaurantCategory {
   if (has('분식') || has('떡볶이') || has('김밥') || has('도시락')) {
     return 'snack';
   }
-  if (
-    has('카페') ||
-    has('브런치') ||
-    has('베이커리') ||
-    has('빵') ||
-    has('디저트') ||
-    has('샐러드')
-  ) {
+  // 카페: 점심 식사가 가능한 브런치 카페·샐러드 전문점도 여기로 묶는다.
+  // (베이커리/디저트류는 위 dessert 분기에서 이미 걸러진 뒤다.)
+  if (has('카페') || has('브런치') || has('샐러드')) {
     return 'cafe';
   }
   if (

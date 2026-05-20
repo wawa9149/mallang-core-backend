@@ -60,6 +60,9 @@ enum RestaurantCategory {
   asian
   snack
   cafe
+  // 떡·한과, 베이커리, 디저트 전문점 등 "식사로 적합하지 않은" 메뉴 위주 식당.
+  // 점심 추천 hard filter 에서 일괄 제외된다.
+  dessert
   etc
 }
 
@@ -101,7 +104,8 @@ model Team {
   lat                Float?
   lng                Float?
   // 도보 반경(미터). 좌표가 채워진 뒤부터 hard-filter에 사용한다.
-  searchRadiusMeters Int      @default(800)
+  // 500m는 도보 5~7분 거리(점심 한 끼 다녀오기 적당한 반경)로 기본값을 잡았다.
+  searchRadiusMeters Int      @default(500)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -314,6 +318,8 @@ model VisitRecord {
   visitedAt    DateTime   @default(now())
   rating       Int?
   note         String?
+  // "이 식당 또 가고 싶어?" 사용자 피드백.
+  wantsAgain   Boolean?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -321,6 +327,8 @@ model VisitRecord {
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   lunchVote  LunchVote? @relation("VisitFromVote", fields: [lunchVoteId], references: [id], onDelete: SetNull)
 
+  // 한 사용자가 같은 투표에 대해 중복 리뷰 방지.
+  @@unique([userId, lunchVoteId])
   @@index([userId, visitedAt])
   @@index([restaurantId, visitedAt])
   @@map("visit_records")

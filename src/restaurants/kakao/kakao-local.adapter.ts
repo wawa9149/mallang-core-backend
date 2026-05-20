@@ -55,6 +55,12 @@ export class KakaoLocalAdapter {
   /**
    * 좌표 기준 반경(미터) 내 음식점(category_group_code=FD6) 전부 가져오기.
    * 카카오는 한 페이지 최대 15건, 최대 3페이지(=45건)를 지원한다. 페이지를 순회해 모두 합쳐 반환.
+   *
+   * sort 정책:
+   *   - 과거에는 sort=distance 였지만, 회사 주변 식당이 많은 지역에서는 45건 cap 안에
+   *     "회사 코앞 식당"만 들어와 반경 끝쪽 식당이 DB 에 누락되는 문제가 있었다.
+   *   - 그래서 sort=accuracy (카카오 기본 정렬, 정확도/노출도 가중) 로 바꿔 거리 편향을 줄인다.
+   *     반경 hard filter 는 어차피 추천 단계에서 다시 적용되므로 sort 와 무관하게 안전하다.
    */
   async findNearbyRestaurants(args: {
     lat: number;
@@ -74,7 +80,7 @@ export class KakaoLocalAdapter {
       url.searchParams.set('radius', String(radius));
       url.searchParams.set('page', String(page));
       url.searchParams.set('size', '15');
-      url.searchParams.set('sort', 'distance');
+      url.searchParams.set('sort', 'accuracy');
 
       const json = await this.request<KakaoCategorySearchResponse>(url, 'category-search');
       results.push(...json.documents);
