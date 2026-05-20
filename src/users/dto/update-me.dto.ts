@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Hobby } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 const TIME_REGEX = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
@@ -58,4 +65,13 @@ export class UpdateMeDto {
   @IsString()
   @MaxLength(80)
   teamName?: string;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      '말랑이가 발화할 때 Clova Voice 로 TTS 도 함께 들을지 여부. 마이페이지의 토글로 변경한다.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ttsEnabled?: boolean;
 }

@@ -130,6 +130,11 @@ model User {
   // 평문은 절대 응답에 노출하지 않고, 마스킹된 hint(앞 5자 + ...)만 메타로 제공한다.
   openaiKeyEnc    String?
   openaiKeyUpdatedAt DateTime?
+  // 온보딩(필수 정보 입력) 완료 시점. 한 번 채워지면 다시 null 로 돌리지 않는다.
+  // 프론트는 이 값의 존재 여부만 보고 OnboardingFlow 노출 여부를 결정한다.
+  onboardedAt     DateTime?
+  // 말랑이 발화를 Clova Voice TTS 로 들을지 여부. 기본은 끔.
+  ttsEnabled      Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

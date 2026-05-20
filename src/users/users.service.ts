@@ -143,6 +143,7 @@ export class UsersService {
     if (input.allergies !== undefined) {
       data.allergies = input.allergies === '' ? null : input.allergies;
     }
+    if (input.ttsEnabled !== undefined) data.ttsEnabled = input.ttsEnabled;
 
     let resolvedCompanyId = current.companyId;
     let resolvedTeamId = current.teamId;
@@ -199,6 +200,18 @@ export class UsersService {
       ? { connect: { id: resolvedCompanyId } }
       : { disconnect: true };
     data.team = resolvedTeamId ? { connect: { id: resolvedTeamId } } : { disconnect: true };
+
+    // 온보딩 완료 시점 박제.
+    // - 한 번 채워지면 다시 null 로 돌리지 않는다(사용자가 잠깐 팀명을 비웠다고 온보딩을 다시 시키지 않기 위해).
+    // - 처음으로 name + teamId 가 동시에 채워지는 순간을 기준으로 한다.
+    const resolvedName = input.name !== undefined ? input.name : current.name;
+    if (
+      !current.onboardedAt &&
+      resolvedName.trim().length > 0 &&
+      resolvedTeamId !== null
+    ) {
+      data.onboardedAt = new Date();
+    }
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
